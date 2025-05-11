@@ -1,0 +1,154 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+#include <ctype.h>
+
+
+#include "../tftp_server/tftp_server.h"
+
+#ifdef _WIN32
+	#include <direct.h> //for mkdir in windows
+	#define MKDIR(PATH) _mkdir (PATH)
+#else 
+	#include <unistd.h> //for unix
+	#define MKDIR(PATH) mkdir(PATH, 0777) //mkdir with full permissions
+#endif 
+
+
+int file_exists(const char *filename){
+	return access(filename, F_OK) != 1; //checks if the file exists
+}
+
+/*
+This part is for the sigint handler (control + c for both server and user)
+*/
+
+void sigint_server(int sig){
+	(void) sig; //To not use the argument
+	printf("Received Control+C, exitting...\n");
+	server_running = 0;
+}
+void sigint_client(int sig){
+	(void) sig; //To not use the argument
+	printf("Received Control+C, exitting...\n");
+	server_running = 0;
+}
+
+
+/*
+This part of the code is for path check, the mode selection between netascii
+and octet mode, it works on unix based OS's and windows too
+*/
+
+int dir_exist(){
+    struct stat st = {0}; // setting up stat
+
+    // check if the folder exists
+    if (stat(TFTP_ROOT_DIR, &st) == -1) {
+        if (errno == ENOENT) {
+            // directory doesn't exist, create it
+            if (mkdir(TFTP_ROOT_DIR, 0755) == 0) {
+                printf("Directory created successfully: %s\n", TFTP_ROOT_DIR);
+                return 1; //success
+            } else {
+                perror("Error creating the directory");
+                return 0; //failed
+            }
+        } else {
+            //some other error
+            perror("Error checking directory");
+            return 0; // Failure
+        }
+    } else {
+        //directory exists
+        printf("Directory exists: %s\n", TFTP_ROOT_DIR);
+        return 1;
+    }
+}
+
+
+//reads if it is netascii
+size_t read_netascii(FILE *file, char *buf, size_t max_s)
+{
+	size_t bytes_read = 0;
+	int ch;
+	while (bytes_read < max_s - 1 && (ch = fgetc(file)) != EOF)
+	{
+		if (ch == '\n')
+		{
+			buf[bytes_read++] = '\r'; // convert \n to \r
+			buf[bytes_read++] = '\n'; // add \n as per tftp spec
+		}
+		else
+		{
+			buf[bytes_read++] = (char)ch;
+		}
+	}
+
+	buf[bytes_read] = '\0'; // for null terminating str
+	return bytes_read;
+}
+
+//prints out the content
+void print_netascii_file(FILE *file) {
+    char buffer[TFTP_BUF_SIZE];
+    size_t bytes_read;
+
+    // Rewind in case the file pointer is not at the beginning
+    rewind(file);
+
+    while ((bytes_read = read_netascii(file, buffer, sizeof(buffer))) > 0) {
+        buffer[bytes_read] = '\0';  // Ensure null-termination
+        printf("%s", buffer);
+    }
+}
+
+//writes netascii
+size_t write_netascii(FILE *file, const char *buf, size_t size)
+{
+	size_t bytes_written = 0;
+	for (size_t i = 0; i < size; i++)
+	{
+		if (buf[i] == '\r' && buf[i + 1] == '\n')
+		{
+			fputc('\n', file); // only write new line part
+			i++;			   // skips character (LF)
+		}
+		else
+		{
+			fputc(buf[i], file);
+		}
+		bytes_written++;
+	}
+	return bytes_written;
+}
+
+
+// checks if it's octet
+
+size_t read_octet(FILE *file, char *buf, size_t max_size)
+{
+	return fread(buf, 1, max_size, file); // Read raw binary data
+}
+
+size_t write_octet(FILE *file, const char *buf, size_t size)
+{
+	return fwrite(buf, 1, size, file); // Write raw binary data
+}
+
+
+
+//for usage of strcasecmp - for both unix and windows 
+int str_casecmp(const char *s1, const char *s2) {
+    while (*s1 && *s2) {
+        if (tolower((unsigned char)*s1) != tolower((unsigned char)*s2))
+            return (unsigned char)*s1 - (unsigned char)*s2;
+        s1++;
+        s2++;
+    }
+    return (unsigned char)*s1 - (unsigned char)*s2;
+}
+

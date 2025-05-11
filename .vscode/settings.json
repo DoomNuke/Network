@@ -1,0 +1,24 @@
+{
+    "files.associations": {
+        "tftp_utils.h": "c",
+        "string.h": "c",
+        "stdio.h": "c",
+        "types.h": "c",
+        "tftp_server.h": "c",
+        "stdlib.h": "c",
+        "tftp_logger.h": "c",
+        "tftp_server_handlers.h": "c",
+        "stddef.h": "c",
+        "tftp_common.h": "c",
+        "inet.h": "c",
+        "socket.h": "c",
+        "signal.h": "c",
+        "unistd.h": "c",
+        "poll.h": "c",
+        "tftp_client.h": "c",
+        "platform_exec.h": "c",
+        "tftp_client_handlers.h": "c",
+        "errno.h": "c",
+        "in.h": "c"
+    }
+}
