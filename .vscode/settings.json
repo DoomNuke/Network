@@ -19,6 +19,7 @@
         "platform_exec.h": "c",
         "tftp_client_handlers.h": "c",
         "errno.h": "c",
-        "in.h": "c"
+        "in.h": "c",
+        "cstdlib": "c"
     }
 }

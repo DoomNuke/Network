@@ -6,15 +6,21 @@
 #include <errno.h>
 #include <ctype.h>
 
-
+#include "tftp_utils.h"
 #include "../tftp_server/tftp_server.h"
+
+/*
+This part of the code is for path check, the mode selection between netascii
+and octet mode, it works on unix based OS's and windows too
+*/
+
 
 #ifdef _WIN32
 	#include <direct.h> //for mkdir in windows
-	#define MKDIR(PATH) _mkdir (PATH)
+	#define MKDIR(TFTP_ROOT_DIR) _mkdir (PATH)
 #else 
 	#include <unistd.h> //for unix
-	#define MKDIR(PATH) mkdir(PATH, 0777) //mkdir with full permissions
+	#define MKDIR(TFTP_ROOT_DIR) mkdir(PATH, 0777) //mkdir with full permissions
 #endif 
 
 
@@ -22,26 +28,8 @@ int file_exists(const char *filename){
 	return access(filename, F_OK) != 1; //checks if the file exists
 }
 
-/*
-This part is for the sigint handler (control + c for both server and user)
-*/
-
-void sigint_server(int sig){
-	(void) sig; //To not use the argument
-	printf("Received Control+C, exitting...\n");
-	server_running = 0;
-}
-void sigint_client(int sig){
-	(void) sig; //To not use the argument
-	printf("Received Control+C, exitting...\n");
-	server_running = 0;
-}
 
 
-/*
-This part of the code is for path check, the mode selection between netascii
-and octet mode, it works on unix based OS's and windows too
-*/
 
 int dir_exist(){
     struct stat st = {0}; // setting up stat
@@ -50,7 +38,7 @@ int dir_exist(){
     if (stat(TFTP_ROOT_DIR, &st) == -1) {
         if (errno == ENOENT) {
             // directory doesn't exist, create it
-            if (mkdir(TFTP_ROOT_DIR, 0755) == 0) {
+            if (mkdir(TFTP_ROOT_DIR, 0777) == 0) {
                 printf("Directory created successfully: %s\n", TFTP_ROOT_DIR);
                 return 1; //success
             } else {
@@ -68,6 +56,7 @@ int dir_exist(){
         return 1;
     }
 }
+
 
 
 //reads if it is netascii

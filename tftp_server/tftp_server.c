@@ -10,21 +10,32 @@
 
 #include "tftp_server.h"
 
-extern volatile sig_atomic_t server_running; //calling the control+c handler
+volatile sig_atomic_t server_running = 1; //calling the control+c handler
 
-void start_tftp_server() {
+void sigint_server(int sig){
+	(void) sig; //To not use the argument
+	printf("Received Control+C, exitting...\n");
+	server_running = 0;
+}
+
+int main () {
     int sockfd;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     char buffer[TFTP_BUF_SIZE];
     ssize_t recv_len;
 
-    signal(SIGINT, sigint_server);
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Error creating socket\n");
         close(sockfd);
         EXIT_FAILURE;
+    }
+
+    //calls function of dir root dir creation
+     if (!dir_exist()) {
+        fprintf(stderr, "TFTP root directory check/creation failed.\n");
+        return EXIT_FAILURE;
     }
 
     // Set up server address
@@ -39,8 +50,15 @@ void start_tftp_server() {
         EXIT_FAILURE;
     }
 
+
     printf("TFTP server has started listening to requests\n");
-    logger("INFO", "Server has started");
+    logger("INFO", "Server has startedn\n");
+    
+    
+    if (signal(SIGINT, sigint_server) == SIG_ERR) {
+    perror("Error setting signal handler");
+    exit(EXIT_FAILURE);
+}
 
     while (server_running) {
         recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &client_addr_len);

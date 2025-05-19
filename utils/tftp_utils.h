@@ -22,11 +22,6 @@
 #define TFTP_OPCODE_F 10 //disk full
 
 
-//sigints for both server and clients
-volatile sig_atomic_t server_running = 1;
-void sigint_server(int sig);
-volatile sig_atomic_t client_running = 1;
-void sigint_client(int sig);
 
 //root folder, every single file goes there and every operation happens in that folder
 #define PATH_LENGTH 256
@@ -43,8 +38,7 @@ size_t write_octet(FILE *file, const char *buffer, size_t size);
 //prints netascii contents
 void print_netascii_file(FILE *file); 
 
-//checks if the folder exists or not
-int dir_exist();
+
 //checks if the file exists 
 int file_exists(const char *filename);
 

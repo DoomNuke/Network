@@ -10,40 +10,42 @@
 #include <sys/socket.h>
 #include <poll.h>
 
-#include "../common/tftp_common.h"
+
 #include "../utils/tftp_logger.h"
 #include "../utils/tftp_utils.h"
 #include "tftp_server_handlers.h"
 #include "tftp_server.h"
 
-#define TIMEOUT_MS 3000 //3 seconds timeout
+#define TIMEOUT_MS 5000 //5 seconds timeout
 
 
 //logger
-void logger(const char *level, const char *format, ...){
+void logger(const char *level, const char *format, ...) {
+    // Open the log file in append mode
     FILE *file = fopen(LOG_FILE, "a");
-    if(!file){
-        perror("Error opening logger file");
+    if (!file) {
+        perror("Error opening log file");
         return;
     }
 
-    time_t time_r; 
+    time_t time_r;
     struct tm *timeinfo;
-    char time_buf[20];
+    char time_buf[50];
 
     time(&time_r);
     timeinfo = localtime(&time_r);
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H-%M-%S", timeinfo);  //formatting it as y-m-d  h-m-s
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H-%M-%S", timeinfo); // Format date
 
-    fprintf(file, "[%s [%s]", time_buf, level);
+    fprintf(file, "[%s [%s]] ", time_buf, level); // Write the timestamp and level
 
-    //how the message formatting works
+    // Handle the variable arguments
     va_list args;
     va_start(args, format);
-    vfprintf(file, format, args); 
+    vfprintf(file, format, args);  // Write the formatted string
     va_end(args);
-}
 
+    fclose(file);  // Don't forget to close the file!
+}
 //sender ack
 void send_ack(int sockfd, struct sockaddr_in *client_addr, tftp_packet_t *packet)
 {
