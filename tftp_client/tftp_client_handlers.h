@@ -16,11 +16,11 @@ void set_client_port(struct sockaddr_in *client_addr);
 //release the port
 void release_port(int port);
 
-//to send ack
-void send_ack(int sockfd, struct sockaddr_in *server_addr, uint16_t block_n);
+//data send
+int send_data(int sockfd, struct sockaddr_in *server_addr, FILE *file);
 
 //oper handlers
-void rrq_h(int sockfd, struct sockaddr_in *server_addr, const char *filename, const char *mode);
+void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename);
 void wrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const char *mode);
 void del_h(int sockfd, struct sockaddr_in *server_addr);
 

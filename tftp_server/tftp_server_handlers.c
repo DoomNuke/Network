@@ -1,29 +1,32 @@
 #include <stdio.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <poll.h>
-
+#include <sys/time.h>
 
 #include "../utils/tftp_logger.h"
 #include "../utils/tftp_utils.h"
 #include "tftp_server_handlers.h"
 #include "tftp_server.h"
 
-#define TIMEOUT_MS 5000 //5 seconds timeout
+#define TIMEOUT_MS 5000 // 5 seconds timeout
 
-
-//logger
-void logger(const char *level, const char *format, ...) {
+// logger
+void logger(const char *level, const char *format, ...)
+{
     // Open the log file in append mode
     FILE *file = fopen(LOG_FILE, "a");
-    if (!file) {
+    if (!file)
+    {
         perror("Error opening log file");
         return;
     }
@@ -34,424 +37,455 @@ void logger(const char *level, const char *format, ...) {
 
     time(&time_r);
     timeinfo = localtime(&time_r);
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H-%M-%S", timeinfo); // Format date
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", timeinfo); // Format date
 
     fprintf(file, "[%s [%s]] ", time_buf, level); // Write the timestamp and level
 
     // Handle the variable arguments
     va_list args;
     va_start(args, format);
-    vfprintf(file, format, args);  // Write the formatted string
+    vfprintf(file, format, args); // Write the formatted string
     va_end(args);
 
-    fclose(file);  // Don't forget to close the file!
+    fclose(file); // Don't forget to close the file!
 }
-//sender ack
-void send_ack(int sockfd, struct sockaddr_in *client_addr, tftp_packet_t *packet)
+// sender ack
+void send_ack(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, tftp_packet_t *packet)
 {
-    int retries = 0;
     char ack_packet[4];
 
-    //2 bytes for the ack packet 2 bytes for the block_n
+    ack_packet[0] = 0;
+    ack_packet[1] = TFTP_OPCODE_ACK;
+    ack_packet[2] = (packet->ack_pkt.block_n >> 8) & 0xFF;
+    ack_packet[3] = packet->ack_pkt.block_n & 0xFF;
 
-    ack_packet[0] = 0; //opcode ack
-    ack_packet[1] =  TFTP_OPCODE_ACK;
-    ack_packet[2] = (packet->ack_pkt.block_n >> 8) & 0xFF; //for msb
-    ack_packet[3] = packet->ack_pkt.block_n & 0xFF; //for lsb
-
-    while(retries <= MAX_RETRIES) {
-    if (sendto(sockfd, ack_packet, sizeof(ack_packet), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0)
+    if (sendto(sockfd, ack_packet, sizeof(ack_packet), 0,
+               (struct sockaddr *)client_addr, client_len) < 0)
     {
-        return; //exit the function, success
+        perror("Error sending ACK");
     }
-
-    printf("Error: ACK not sent (Attempt:%d)\n", retries + 1);
-    sleep(3); //wait for three seconds before retrying
+    else
+    {
+        printf("Sent ACK for block %d\n", packet->ack_pkt.block_n);
     }
-
-    printf("Error: Failed to send ACK after %d retries\n", retries);
 }
 
+// function for file already exists
+int f_exists(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename)
+{
+    char filepath[PATH_LENGTH];
 
-int parse_wrq_packet(const char *buffer, char *filename, char *mode) {
-    if (buffer[0] != 0 || buffer[1] != TFTP_OPCODE_WRQ) //checks if it the opcode is WRQ
-        return 0;
+    snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_ROOT_DIR, filename);
 
-    //extracts the file name//
-    const char *p = buffer + 2;
-    size_t fname_len = strlen(p);
-    size_t mode_len = strlen(p + fname_len + 1); //checks for mode 
-
-    if (fname_len == 0 || mode_len == 0) 
-        return 0; //checks if the filename or mode are not null
-
-    if (fname_len + mode_len + 4 > TFTP_BUF_SIZE)
-        return 0; //checks for overflow
-        
-    //copy filename and mode//
-    strncpy(filename, p, fname_len + 1);
-    strncpy(mode, p + fname_len + 1, mode_len + 1);
-
-    return (str_casecmp(mode, "netascii") == 0 || str_casecmp(mode, "octet") == 0);
+    if (access(filepath, F_OK) == 0)
+    {
+        logger("ERROR", "File already exists: %s", filename);
+        // Send error packet (File already exists)
+        const char *error_msg = ("File already exists");
+        int err_len = 4 + strlen(error_msg) + 1;
+        char *error_packet = malloc(err_len);
+        if (!error_packet)
+        {
+            logger("ERROR", "Memory allocation failed\n");
+            return 0;
+        }
+        error_packet[0] = 0;
+        error_packet[1] = TFTP_OPCODE_ERROR;
+        error_packet[2] = 0;
+        error_packet[3] = TFTP_OPCODE_EXISTS; // File already exists error code
+        strcpy(error_packet + 4, error_msg);
+        sendto(sockfd, error_packet, err_len, 0, (struct sockaddr *)client_addr, client_len);
+        free(error_packet);
+        return 0; // failure
+    }
+    return 1; // success
 }
 
+// function for file access
+int f_acc(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename)
+{
+    char filepath[PATH_LENGTH];
+    snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_ROOT_DIR, filename);
+
+    // Check file existence and readability
+    if (access(filepath, R_OK) != 0)
+    {
+        logger("ERROR", "Access violation or file does not exist: %s\n", filename);
+        // Send error packet (Access violation)
+        char error_msg[] = "Access violation";
+        size_t msg_len = strlen(error_msg);
+        char error_packet[4 + msg_len + 1];
+
+        error_packet[0] = 0;
+        error_packet[1] = TFTP_OPCODE_ERROR;
+        error_packet[2] = 0;
+        error_packet[3] = TFTP_OPCODE_ACC_ERR; // Access violation error code
+        strcpy(error_packet + 4, error_msg);
+
+        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
+        return 0; // failure
+    }
+    return 1; // success
+}
 
 /*
-	writes data by the file mode 
+    writes data by the file mode
  */
-ssize_t write_file_data(FILE *file, const char *buffer, size_t size, const char *mode) {
-    if (!file || !buffer || !mode) {
+ssize_t write_file_data(FILE *file, const char *buffer, size_t size, const char *mode)
+{
+    if (!file || !buffer || !mode)
+    {
         return -1; // Invalid input
     }
 
     ssize_t bytes_written = 0;
 
-    if (str_casecmp(mode, "netascii") == 0) {
+    if (str_casecmp(mode, "netascii") == 0)
+    {
         bytes_written = write_netascii(file, buffer, size);
-    } else if (str_casecmp(mode, "octet") == 0) {
+    }
+    else if (str_casecmp(mode, "octet") == 0)
+    {
         bytes_written = write_octet(file, buffer, size);
-    } else {
+    }
+    else
+    {
         return -1; // Unsupported mode
     }
 
-    if (bytes_written != size) {
+    if (bytes_written != size)
+    {
         return -1; // Writing error: not all bytes were written
     }
 
     return bytes_written; // Successfully written
 }
 
+// WRQ
 
-//WRQ
-
-void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode) {
+void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode)
+{
     char filepath[PATH_LENGTH];
     FILE *file;
     tftp_packet_t packet;
-    uint16_t block_n = 0;
+    uint16_t block_n = 1;
     ssize_t recv_len;
     char buffer[TFTP_BUF_SIZE];
     int retries = 0;
 
-    // Construct full file path
-    snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_ROOT_DIR, filename);
+    snprintf(filepath, PATH_LENGTH, "%s/%s", TFTP_ROOT_DIR, filename);
 
-    // Check if file already exists
-    if (access(filepath, F_OK) == 0) {
-        logger("ERROR", "File already exists: %s", filename);
-        // Send error packet (File already exists)
-        char error_packet[5 + strlen("File already exists")];
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_EXISTS; // File already exists error code
-        strcpy(error_packet + 4, "File already exists");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
+    // checks if the file exists, and if it does, it exits
+    if (!f_exists(sockfd, client_addr, client_len, filename))
+        return;
+
+    if (str_casecmp(mode, "netascii") == 0)
+        file = fopen(filepath, "w");
+    else if (str_casecmp(mode, "octet") == 0)
+        file = fopen(filepath, "wb");
+    else
+        return;
+
+    if (!file)
+    {
+        logger("ERROR", "Failed to open file for writing");
         return;
     }
 
-    // Open file with appropriate mode
-    if (str_casecmp(mode, "netascii") == 0) {
-        file = fopen(filepath, "w");  // Text mode for netascii
-    } else {
-        file = fopen(filepath, "wb"); // Binary mode for octet
+
+    // Set socket receive timeout (5 seconds)
+    struct timeval tv = {5, 0};
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+    {
+        perror("setsockopt failed");
+        // continue anyways, not fatal
     }
-
-    if (!file) {
-        logger("ERROR", "Failed to create file: %s", filename);
-        // Send error packet (Access violation)
-        char error_packet[5 + strlen("Access violation")];
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_ACC_ERR; // Access violation error code
-        strcpy(error_packet + 4, "Access violation");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
-        return;
-    }
-
-    logger("INFO", "Starting file transfer: %s in %s mode", filename, mode);
-
-    // Send initial ACK for WRQ
-    packet.ack_pkt.block_n = 0;
-    send_ack(sockfd, client_addr, &packet);
-
-    // Initialize pollfd structure
-    struct pollfd fds[1];
-    fds[0].fd = sockfd;
-    fds[0].events = POLLIN;  // We want to poll for readable data
-
-    // Receive and process data packets
-    while (retries < MAX_RETRIES) {
-        // Use poll() to handle the timeout and event checking
-        int poll_ret = poll(fds, 1, TIMEOUT_MS);  //3 seconds timeout
-
-        if (poll_ret < 0) {
-            logger("ERROR", "Error with poll, retrying...");
+    while (retries < MAX_RETRIES)
+    {
+        socklen_t addr_len = sizeof(*client_addr);
+        recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)client_addr, &addr_len);
+        if (recv_len < 0)
+        {
+            perror("recvfrom failed");
             retries++;
             continue;
         }
 
-        if (poll_ret == 0) {
-            // Poll timeout
+        printf("Received %zd bytes. Opcode bytes: 0x%02x 0x%02x\n",
+        (ssize_t)recv_len ,(unsigned char)buffer[0],(unsigned char)buffer[1]);
+
+        if (recv_len < 4)
+        {
+            printf("Packet too short\n");
             retries++;
-            logger("ERROR", "Timeout waiting for data packet, retrying... (%d/%d)", retries, MAX_RETRIES);
             continue;
         }
 
-        // Now we know there's data available to receive
-        if (fds[0].revents & POLLIN) {
-            recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)client_addr, &client_len);
-            if (recv_len < 0) {
-                retries++;
-                logger("ERROR", "Error receiving data packet, retrying... (%d/%d)", retries, MAX_RETRIES);
-                continue;
-            }
+        if (buffer[1] != TFTP_OPCODE_DATA)
+        {
+            printf("Unexpected opcode: %d\n", buffer[1]);
+            retries++;
+            continue;
+        }
 
-            // Check if it's a data packet
-            if (buffer[0] != 0 || buffer[1] != TFTP_OPCODE_DATA) {
-                logger("ERROR", "Expected DATA packet, got different opcode. Retrying...");
-                retries++;
-                continue;
-            }
+        uint16_t recv_block_n = (buffer[2] << 8) | buffer[3];
 
-            // Get block number
-            uint16_t received_block = (buffer[2] << 8) | buffer[3];
-
-            // Handle duplicate block (re-ACK the same block)
-            if (received_block == block_n) {
-                packet.ack_pkt.block_n = received_block;
-                send_ack(sockfd, client_addr, &packet);
-                continue; // Skip duplicated data
-            }
-
-            // Check if it's the expected block
-            if (received_block != block_n + 1) {
-                logger("ERROR", "Unexpected block number: %d (expected %d). Retrying...", received_block, block_n + 1);
-                retries++;
-                continue; // Check for the expected block
-            }
-
-            // Write data to file using mode
-            size_t data_size = recv_len - 4; // Remove header size
-            ssize_t bytes_written = write_file_data(file, buffer + 4, data_size, mode);
-
-            if (bytes_written == -1) {
-                logger("ERROR", "Error writing to file. Retrying...");
-                retries++;
-                continue;
-            }
-
-            // Send ACK
-            packet.ack_pkt.block_n = received_block;
-            send_ack(sockfd, client_addr, &packet);
-
-            // Block number increment
-            block_n = received_block;
-            retries = 0;
-
-            // Check if this was the last packet
-            if (data_size < TFTP_DATA_SIZE) {
+        if (recv_block_n == block_n + 1)
+        {
+            ssize_t data_len = recv_len - 4;
+            ssize_t written = write_file_data(file, buffer + 4, data_len, mode);
+            if (written < data_len)
+            {
+                logger("ERROR", "Failed to write full block to file");
                 break;
             }
+
+            block_n = recv_block_n;
+            retries = 0;
+
+            // ACK back to client
+            packet.ack_pkt.block_n = block_n;
+            send_ack(sockfd, client_addr, client_len, &packet);
+
+            if (data_len < TFTP_DATA_SIZE)
+                break; // End of file
+        }
+        else if (recv_block_n == block_n)
+        {
+            // Duplicate DATA block (retransmit ACK)
+            packet.ack_pkt.block_n = block_n;
+            send_ack(sockfd, client_addr, client_len, &packet);
         }
     }
 
     fclose(file);
-
-    if (retries >= MAX_RETRIES) {
-        logger("ERROR", "Transfer failed after %d retries: %s", MAX_RETRIES, filename);
-        // Clean up the partial file
-        remove(filepath);
-    } else {
-        logger("INFO", "File transfer completed successfully: %s", filename);
-    }
+    printf("File transfer completed: %s\n", filename);
 }
 
-
-//RRQ 
-void rrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode) {
+// RRQ
+void rrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode)
+{
     char filepath[PATH_LENGTH];
     FILE *file;
-
-    uint16_t block_n = 1;  // Start with block 1
+    uint16_t block_n = 1;
     char buffer[TFTP_BUF_SIZE];
     int retries = 0;
+    ssize_t bytes_read = 0;
+    ssize_t last_bytes_read = 0;
 
-    // Construct full file path
     snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_ROOT_DIR, filename);
 
-    // Check if file exists
-    if (access(filepath, F_OK) == -1) {
-        logger("ERROR", "File does not exist: %s", filename);
-        // Send error packet (File not found)
-        char error_packet[5 + strlen("File not found")];
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_NE; // File not found error code
-        strcpy(error_packet + 4, "File not found");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
+    // checkup to see if permissions are set
+    if (!f_acc(sockfd, client_addr, client_len, filename))
         return;
-    }
 
-    // Open file with appropriate mode
-    if (str_casecmp(mode, "netascii") == 0) {
-        file = fopen(filepath, "r");  // Text mode for netascii
-    } else {
-        file = fopen(filepath, "rb"); // Binary mode for octet
-    }
-
-    if (!file) {
-        logger("ERROR", "Failed to open file: %s", filename);
-        // Send error packet (Access violation)
-        char error_packet[5 + strlen("Access violation")];
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_ACC_ERR; // Access violation error code
-        strcpy(error_packet + 4, "Access violation");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
+    if (str_casecmp(mode, "netascii") == 0)
+        file = fopen(filepath, "r");
+    else if (str_casecmp(mode, "octet") == 0)
+        file = fopen(filepath, "rb");
+    else
         return;
+
+    if (!file)
+        return;
+
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    logger("INFO", "File opened successfully: %s (%ld bytes)", filename, file_size);
+
+    // Set socket receive timeout (5 seconds)
+    struct timeval tv = {5, 0};
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+    {
+        perror("setsockopt failed");
+        // continue anyways, not fatal
     }
 
-    logger("INFO", "Processing read request: %s in %s mode", filename, mode);
-
-    // Polling setup: We'll use poll() to wait for incoming ACKs with a timeout
-    struct pollfd pfds[1];
-    pfds[0].fd = sockfd;  // The socket descriptor
-    pfds[0].events = POLLIN;  // We want to know when the socket is ready for reading
-
-    // Read and send data
-    while (retries < MAX_RETRIES) {
-        size_t bytes_read;
-
-        // Read data using appropriate mode
-        if (str_casecmp(mode, "netascii") == 0) {
+    while (1)
+    {
+        if (str_casecmp(mode, "netascii") == 0)
             bytes_read = read_netascii(file, buffer + 4, TFTP_DATA_SIZE);
-        } else {
+        else if (str_casecmp(mode, "octet") == 0)
             bytes_read = read_octet(file, buffer + 4, TFTP_DATA_SIZE);
-        }
 
-        if (bytes_read == 0) {
-            // End of file
-            break;
-        }
+        last_bytes_read = bytes_read;
 
-        // Prepare DATA packet
         buffer[0] = 0;
         buffer[1] = TFTP_OPCODE_DATA;
-        buffer[2] = (block_n >> 8) & 0xFF;  // MSB
-        buffer[3] = block_n & 0xFF;         // LSB
+        buffer[2] = (block_n >> 8) & 0xFF;
+        buffer[3] = block_n & 0xFF;
 
-        // Send DATA packet
-        if (sendto(sockfd, buffer, bytes_read + 4, 0, (struct sockaddr *)client_addr, client_len) < 0) {
-            retries++;
-            logger("ERROR", "Error sending DATA packet, retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        }
+        ssize_t sent_len = sendto(sockfd, buffer, bytes_read + 4, 0,
+                                  (struct sockaddr *)client_addr, client_len);
+        if (sent_len < 0)
+            break;
 
-        // Poll for incoming ACK with a timeout
-        int poll_ret = poll(pfds, 1, TIMEOUT_MS); //timeout for 3 seconds
-        
-        if (poll_ret == 0) {
-            // Timeout, no ACK received in time
-            retries++;
-            logger("ERROR", "Timeout occurred waiting for ACK, retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        } else if (poll_ret < 0) {
-            // Error in poll
-            retries++;
-            logger("ERROR", "Error in poll(), retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        }
+        while (1)
+        {
+            socklen_t addr_len = sizeof(*client_addr);
+            ssize_t recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0,
+                                        (struct sockaddr *)client_addr, &addr_len);
+            if (recv_len < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    // Timeout occurred — resend last data packet
+                    if (++retries >= MAX_RETRIES)
+                    {
+                        fprintf(stderr, "Max retries reached. Aborting transfer.\n");
+                        fclose(file);
+                        return;
+                    }
+                    ssize_t resend_len = sendto(sockfd, buffer, bytes_read + 4, 0,
+                                                (struct sockaddr *)client_addr, addr_len);
+                    if (resend_len < 0)
+                    {
+                        perror("Failed to resend data packet");
+                        fclose(file);
+                        return;
+                    }
+                    continue; // wait again for ACK
+                }
+                else
+                {
+                    perror("recvfrom error");
+                    fclose(file);
+                    return;
+                }
+            }
 
-        // If we reach here, we have a valid event
-        ssize_t ack_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)client_addr, &client_len);
-        
-        if (ack_len < 0) {
-            retries++;
-            logger("ERROR", "Error receiving ACK, retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        }
+            // Got something — check if it's a valid ACK
+            if (recv_len < 4 || buffer[1] != TFTP_OPCODE_ACK)
+                continue;
 
-        // Verify ACK
-        if (buffer[0] != 0 || buffer[1] != TFTP_OPCODE_ACK) {
-            retries++;
-            logger("ERROR", "Expected ACK, got different opcode, retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        }
+            uint16_t ack_block = (buffer[2] << 8) | buffer[3];
+            if (ack_block != block_n)
+            {
+                continue;
+            }
 
-        uint16_t ack_block = (buffer[2] << 8) | buffer[3];
-        if (ack_block != block_n) {
-            retries++;
-            logger("ERROR", "Unexpected ACK block number: %d (expected %d), retrying... (%d/%d)", ack_block, block_n, retries, MAX_RETRIES);
-            continue;
-        }
+            // ACK received correctly
+            retries = 0;
+            break; // exit inner while and send next block
 
-        // Success, move to next block
-        block_n++;
-        retries = 0;
+            // If last block was exactly TFTP_DATA_SIZE, send a zero-byte data packet
+            if (last_bytes_read == TFTP_DATA_SIZE)
+            {
+                buffer[0] = 0;
+                buffer[1] = TFTP_OPCODE_DATA;
+                buffer[2] = (block_n >> 8) & 0xFF;
+                buffer[3] = block_n & 0xFF;
 
-        // Check if this was the last packet
-        if (bytes_read < TFTP_DATA_SIZE) {
+                ssize_t sent_len = sendto(sockfd, buffer, 4, 0, (struct sockaddr *)client_addr, client_len);
+                if (sent_len < 0)
+                {
+                    perror("Failed to send last zero-byte packet");
+                    fclose(file);
+                    return;
+                }
+
+                socklen_t addr_len = client_len;
+                ssize_t recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0,
+                                            (struct sockaddr *)client_addr, &addr_len);
+                if (recv_len < 0)
+                {
+                    perror("recvfrom failed");
+                    return;
+                }
+                else if (recv_len < 4)
+                {
+                    fprintf(stderr, "Received packet too small: %zd bytes\n", recv_len);
+                }
+                else
+                {
+                    // At least 4 bytes received, can safely access opcode and block number
+                    uint16_t recv_opcode = (buffer[0] << 8) | buffer[1];
+                    if (recv_opcode != TFTP_OPCODE_ACK)
+                    {
+                        fprintf(stderr, "Unexpected opcode %d received\n", recv_opcode);
+                        return;
+                    }
+                    else
+                    {
+                        uint16_t ack_block = (buffer[2] << 8) | buffer[3];
+                        printf("Received ACK for block %d\n", ack_block);
+                        // process ACK block number as needed
+                    }
+                }
+            }
+            block_n++;
             break;
         }
     }
 
-    fclose(file);
+    if (bytes_read == TFTP_DATA_SIZE)
+    {
+        buffer[0] = 0;
+        buffer[1] = TFTP_OPCODE_DATA;
+        buffer[2] = (block_n >> 8) & 0xFF;
+        buffer[3] = block_n & 0xFF;
 
-    if (retries >= MAX_RETRIES) {
-        logger("ERROR", "Read request failed after %d retries: %s", MAX_RETRIES, filename);
-    } else {
-        logger("INFO", "Read request completed: %s", filename);
+        ssize_t sent_len = sendto(sockfd, buffer, 4, 0,
+                                  (struct sockaddr *)client_addr, client_len);
+        if (sent_len < 0)
+        {
+            perror("Failed to send last zero-byte data packet");
+            fclose(file);
+            return;
+        }
+        printf("Sent last zero-byte DATA packet for block %d\n", block_n);
+
+        // Now wait for the final ACK for this block
+        socklen_t addr_len = client_len;
+        ssize_t recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0,
+                                    (struct sockaddr *)client_addr, &addr_len);
+        if (recv_len < 0)
+        {
+            perror("recvfrom failed on last ACK");
+            // handle retry logic here if needed
+        }
+        else if (recv_len < 4)
+        {
+            fprintf(stderr, "Received too small packet on last ACK: %zd bytes\n", recv_len);
+        }
+        else
+        {
+            uint16_t recv_opcode = (buffer[0] << 8) | buffer[1];
+            uint16_t ack_block = (buffer[2] << 8) | buffer[3];
+            if (recv_opcode == TFTP_OPCODE_ACK && ack_block == block_n)
+            {
+                printf("Received final ACK for block %d\n", ack_block);
+            }
+            else
+            {
+                fprintf(stderr, "Unexpected packet on last ACK: opcode %d block %d\n", recv_opcode, ack_block);
+            }
+        }
+        fclose(file);
     }
 }
 
-
-
-//DEL
-void del_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode) {
+// DEL
+void del_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode)
+{
     char filepath[PATH_LENGTH];
-    char buffer[TFTP_BUF_SIZE];
-    int retries = 0;
+    tftp_packet_t packet;
 
     // Construct full file path
     snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_ROOT_DIR, filename);
 
-    // Check if file exists
-    if (access(filepath, F_OK) == -1) {
-        logger("ERROR", "File does not exist: %s", filename);
-        // Send error packet (File not found)
-        char error_packet[5 + strlen("File not found") + 1]; //the + 1 is for null terminator
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_NE; // File not found error code
-        strcpy(error_packet + 4, "File not found");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
-        return;
-    }
-
-    // Check if we have permission to delete the file via W_OK as in (Write permissions)
-    if (access(filepath, W_OK) == -1) { 
-        logger("ERROR", "No permission to delete file: %s", filename);
-        // Send error packet (Access violation)
-        char error_packet[5 + strlen("Access violation") + 1]; //for null termination
-        error_packet[0] = 0;
-        error_packet[1] = TFTP_OPCODE_ERROR;
-        error_packet[2] = 0;
-        error_packet[3] = TFTP_OPCODE_ACC_ERR; // Access violation error code
-        strcpy(error_packet + 4, "Access violation");
-        sendto(sockfd, error_packet, sizeof(error_packet), 0, (struct sockaddr *)client_addr, client_len);
-        return;
-    }
+    // file access permissions check
+    f_acc(sockfd, client_addr, client_len, filename);
 
     // Attempt to delete the file
-    if (remove(filepath) != 0) {
+    if (remove(filepath) != 0)
+    {
         logger("ERROR", "Failed to delete file: %s", filename);
         // Send error packet (Disk full or allocation exceeded)
-        char error_packet[5 + strlen("Disk full or allocation exceeded") + 1]; //for null termination
+        char error_packet[5 + strlen("Disk full or allocation exceeded") + 1]; // for null termination
         error_packet[0] = 0;
         error_packet[1] = TFTP_OPCODE_ERROR;
         error_packet[2] = 0;
@@ -464,64 +498,8 @@ void del_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_l
     logger("INFO", "File deleted successfully: %s", filename);
 
     // Send success response (ACK with block number 0)
-    buffer[0] = 0;
-    buffer[1] = TFTP_OPCODE_ACK;
-    buffer[2] = 0;  // Block number MSB
-    buffer[3] = 0;  // Block number LSB
+    packet.ack_pkt.block_n = 0;
+    send_ack(sockfd, client_addr, client_len, &packet);
 
-    // Initialize pollfd structure
-    struct pollfd fds[1];
-    fds[0].fd = sockfd;
-    fds[0].events = POLLIN;  // We wait for any events happening to the file descriptor 
-
-    // Send ACK and wait for confirmation
-    while (retries < MAX_RETRIES) {
-        // Use poll() to handle the timeout and event checking
-        int poll_ret = poll(fds, 1, TIMEOUT_MS);  //Timeout
-
-        if (poll_ret < 0) {
-            logger("ERROR", "Error with poll, retrying...");
-            retries++;
-            continue;
-        }
-
-        if (poll_ret == 0) {
-            // Poll timeout
-            retries++;
-            logger("ERROR", "Timeout waiting for ACK, retrying... (%d/%d)", retries, MAX_RETRIES);
-            continue;
-        }
-
-        // Now we know there's data available to receive
-        if (fds[0].revents & POLLIN) {
-            // Send ACK
-            if (sendto(sockfd, buffer, 4, 0, (struct sockaddr *)client_addr, client_len) < 0) {
-                retries++;
-                logger("ERROR", "Error sending ACK, retrying...");
-                continue;
-            }
-
-            // Wait for confirmation
-            ssize_t ack_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)client_addr, &client_len);
-            if (ack_len < 0) {
-                retries++;
-                logger("ERROR", "Error receiving confirmation, retrying...");
-                continue;
-            }
-
-            // Verify confirmation
-            if (buffer[0] != 0 || buffer[1] != TFTP_OPCODE_ACK) {
-                retries++;
-                logger("ERROR", "Expected ACK, got different opcode, retrying...");
-                continue;
-            }
-
-            // Success
-            break;
-        }
-    }
-
-    if (retries >= MAX_RETRIES) {
-        logger("ERROR", "Delete operation failed after %d retries: %s", MAX_RETRIES, filename);
-    }
+    printf("File %s has been deleted successfully", filename);
 }

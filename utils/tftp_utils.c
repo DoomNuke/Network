@@ -14,14 +14,14 @@ This part of the code is for path check, the mode selection between netascii
 and octet mode, it works on unix based OS's and windows too
 */
 
+/* additional feature to be made in the future----
 
 #ifdef _WIN32
 	#include <direct.h> //for mkdir in windows
 	#define MKDIR(TFTP_ROOT_DIR) _mkdir (PATH)
-#else 
+*/
 	#include <unistd.h> //for unix
 	#define MKDIR(TFTP_ROOT_DIR) mkdir(PATH, 0777) //mkdir with full permissions
-#endif 
 
 
 int file_exists(const char *filename){
@@ -31,15 +31,15 @@ int file_exists(const char *filename){
 
 
 
-int dir_exist(){
+int dir_exist(const char *dir_path){
     struct stat st = {0}; // setting up stat
 
     // check if the folder exists
-    if (stat(TFTP_ROOT_DIR, &st) == -1) {
+    if (stat(dir_path, &st) == -1) {
         if (errno == ENOENT) {
             // directory doesn't exist, create it
-            if (mkdir(TFTP_ROOT_DIR, 0777) == 0) {
-                printf("Directory created successfully: %s\n", TFTP_ROOT_DIR);
+            if (mkdir(dir_path, 0777) == 0) {
+                printf("Directory created successfully: %s\n", dir_path);
                 return 1; //success
             } else {
                 perror("Error creating the directory");
@@ -52,7 +52,7 @@ int dir_exist(){
         }
     } else {
         //directory exists
-        printf("Directory exists: %s\n", TFTP_ROOT_DIR);
+        printf("Directory exists: %s\n", dir_path);
         return 1;
     }
 }
@@ -60,26 +60,29 @@ int dir_exist(){
 
 
 //reads if it is netascii
-size_t read_netascii(FILE *file, char *buf, size_t max_s)
+size_t read_netascii(FILE *file, char *buf, size_t max_size)
 {
-	size_t bytes_read = 0;
-	int ch;
-	while (bytes_read < max_s - 1 && (ch = fgetc(file)) != EOF)
-	{
-		if (ch == '\n')
-		{
-			buf[bytes_read++] = '\r'; // convert \n to \r
-			buf[bytes_read++] = '\n'; // add \n as per tftp spec
-		}
-		else
-		{
-			buf[bytes_read++] = (char)ch;
-		}
-	}
+    size_t bytes_read = 0;
+    int ch;
 
-	buf[bytes_read] = '\0'; // for null terminating str
-	return bytes_read;
+    while ((ch = fgetc(file)) != EOF)
+    {
+        if (ch == '\n')
+        {
+            if (bytes_read + 2 > max_size) break;
+            buf[bytes_read++] = '\r';
+            buf[bytes_read++] = '\n'; 
+        }
+        else
+        {
+            if (bytes_read + 1 > max_size) break;
+            buf[bytes_read++] = (char)ch;
+        }
+    }
+
+    return bytes_read;
 }
+
 
 //prints out the content
 void print_netascii_file(FILE *file) {
@@ -91,7 +94,7 @@ void print_netascii_file(FILE *file) {
 
     while ((bytes_read = read_netascii(file, buffer, sizeof(buffer))) > 0) {
         buffer[bytes_read] = '\0';  // Ensure null-termination
-        printf("%s", buffer);
+        printf("%s\n", buffer);
     }
 }
 
@@ -101,18 +104,27 @@ size_t write_netascii(FILE *file, const char *buf, size_t size)
 	size_t bytes_written = 0;
 	for (size_t i = 0; i < size; i++)
 	{
-		if (buf[i] == '\r' && buf[i + 1] == '\n')
-		{
-			fputc('\n', file); // only write new line part
-			i++;			   // skips character (LF)
-		}
-		else
-		{
-			fputc(buf[i], file);
-		}
-		bytes_written++;
-	}
-	return bytes_written;
+      if (buf[i] == '\n')
+        {
+            // Convert linefeed ascii to newline linux based
+            if (fputc('\r', file) == EOF) return bytes_written;
+            if (fputc('\n', file) == EOF) return bytes_written + 1;
+            bytes_written += 2;
+        }
+        else if (buf[i] == '\r')
+        {
+            //convert cartirdge return to cartridge return
+            if (fputc('\r', file) == EOF) return bytes_written;
+            if (fputc('\0', file) == EOF) return bytes_written + 1;
+            bytes_written += 2;
+        }
+        else
+        {
+            if (fputc(buf[i], file) == EOF) return bytes_written;
+            bytes_written++;
+        }
+    }
+    return bytes_written;
 }
 
 
@@ -128,7 +140,26 @@ size_t write_octet(FILE *file, const char *buf, size_t size)
 	return fwrite(buf, 1, size, file); // Write raw binary data
 }
 
+const char *get_mode(const char *filename)
+{
+    const char *ext = strchr(filename, '.');
+    if (!ext || ext == filename)
+    {
+        return "octet";
+    }
 
+    ext++; //skip the dot
+
+    //list of extensions for netascii
+    if (strcasecmp(ext, "txt") == 0 || strcasecmp(ext, "c") == 0 || strcasecmp(ext, "h") == 0 ||
+        strcasecmp(ext, "html") == 0 || strcasecmp(ext, "htm") == 0 || strcasecmp(ext, "py") == 0 ||
+        strcasecmp(ext, "csv") == 0 || strcasecmp(ext, "json") == 0 || strcasecmp(ext, "xml") == 0)
+    {
+        return "netascii";
+    }
+
+    return "octet"; //by default it'll return octet
+}
 
 //for usage of strcasecmp - for both unix and windows 
 int str_casecmp(const char *s1, const char *s2) {

@@ -6,7 +6,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <errno.h>
+#define _POSIX_C_SOURCE 200809L
 #include <signal.h>
+
 
 #include "tftp_server.h"
 
@@ -18,6 +20,20 @@ void sigint_server(int sig){
 	server_running = 0;
 }
 
+void setup_signal_handler(void) {
+    struct sigaction sa;
+    sa.sa_handler = sigint_server;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;  // no SA_RESTART recvfrom will be interrupted
+
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
+}
+
+
+
 int main () {
     int sockfd;
     struct sockaddr_in server_addr, client_addr;
@@ -26,16 +42,15 @@ int main () {
     ssize_t recv_len;
 
 
+
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Error creating socket\n");
-        close(sockfd);
-        EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
-    //calls function of dir root dir creation
-     if (!dir_exist()) {
-        fprintf(stderr, "TFTP root directory check/creation failed.\n");
-        return EXIT_FAILURE;
+    if (!dir_exist(TFTP_ROOT_DIR)) {
+        fprintf(stderr, "Failed to ensure client directory exists. Exiting.\n");
+        exit(EXIT_FAILURE);
     }
 
     // Set up server address
@@ -47,18 +62,20 @@ int main () {
     if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Error binding socket");
         close(sockfd);
-        EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
 
     printf("TFTP server has started listening to requests\n");
-    logger("INFO", "Server has startedn\n");
+    logger("INFO", "Server has started\n");
     
     
     if (signal(SIGINT, sigint_server) == SIG_ERR) {
     perror("Error setting signal handler");
     exit(EXIT_FAILURE);
 }
+
+    setup_signal_handler(); //for signal handler 
 
     while (server_running) {
         recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &client_addr_len);
@@ -106,5 +123,5 @@ int main () {
     }
 
     close(sockfd);
-    logger("INFO", "Server has shut down");
+    logger("INFO", "Server has shut down\n");
 }

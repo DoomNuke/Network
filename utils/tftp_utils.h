@@ -35,6 +35,9 @@ size_t write_netascii(FILE *file, const char *buffer, size_t size);
 size_t read_octet(FILE *file, char *buffer, size_t max_size);
 size_t write_octet(FILE *file, const char *buffer, size_t size);
 
+//mode identifier by extension 
+const char *get_mode(const char *filename);
+
 //prints netascii contents
 void print_netascii_file(FILE *file); 
 

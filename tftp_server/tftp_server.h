@@ -11,6 +11,7 @@
 #define TFTP_ROOT_DIR "./tftp_root"
 
 void sigint_server(int sig);
+void setup_signal_handler(void);
 void start_tftp_server();
 
 #endif

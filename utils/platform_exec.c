@@ -8,7 +8,13 @@
 #include "platform_exec.h"
 #include "tftp_utils.h"
 
-#define MAX_PATH_LENGTH 260
+#define MAX_PATH_LENGTH 300
+
+/*
+* 
+*
+* Windows compatibility will come in the next update 
+
 
 #ifdef _WIN32
 #include <windows.h>
@@ -18,7 +24,6 @@
 #include <errno.h>      // for errno
 
 void handle_user_action(const char *filename, const char *mode) {
-    printf("File received. Would you like to:\n");
     printf("1. Print file contents (only if mode is netascii)\n");
     printf("2. Execute the file\n");
 
@@ -57,26 +62,40 @@ void handle_user_action(const char *filename, const char *mode) {
         printf("Invalid choice or unsupported mode.\n");
     }
 }
+*/
 
-#else  // Unix
+ // Unix
 
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
-void handle_user_action(const char *filename, const char *mode) {
+void handle_user_action(const char *filename, const char *mode, const char *dir) {
+    
     char full_path[MAX_PATH_LENGTH];
 
-    // If filename is NULL, ask for the filename from the user
+    //asking the user for the filename 
     if (filename == NULL) {
+        char input[280];
+
         printf("Enter the filename: ");
-        if (scanf("%255s", full_path) != 1) {
+        if (fgets(input, sizeof(input), stdin) == NULL) {
             fprintf(stderr, "Error reading filename\n");
             return;
         }
+
+        // Remove newline
+        input[strcspn(input, "\n")] = '\0';
+
+        // no traversal
+        if (strstr(input, "..") != NULL) {
+        fprintf(stderr, "Invalid filename: directory traversal not allowed\n");
+        return;
+    }
+
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, input);
     } else {
-        // Build the full path using Unix directory separator
-        snprintf(full_path, sizeof(full_path), "tftp_root/%s", filename);
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, filename);
     }
 
     // Check if the file exists
@@ -85,7 +104,7 @@ void handle_user_action(const char *filename, const char *mode) {
         return;
     }
 
-    printf("File \"%s\" is available. Would you like to:\n", filename);
+    printf("File \"%s\" is available. Would you like to:\n", full_path);
     printf("1. Print file contents (netascii only)\n");
     printf("2. Execute the file\n");
     printf("Choice: ");
@@ -93,39 +112,44 @@ void handle_user_action(const char *filename, const char *mode) {
     int choice;
     if (scanf("%d", &choice) != 1) {
         fprintf(stderr, "Invalid input\n");
+        while (getchar() != '\n' && !feof(stdin));  //clear buffer 
         return;
     }
+    while (getchar() != '\n' && !feof(stdin));  //clear input
 
-    // Option 1: Print file contents in netascii format
-    if (choice == 1 && strcmp(mode, "netascii") == 0) {
+    if (choice == 1) {
+        if (mode == NULL || strcmp(mode, "netascii") != 0) {
+            fprintf(stderr, "This option requires netascii mode.\n");
+            return;
+        }
+
         FILE *file = fopen(full_path, "r");
         if (!file) {
             perror("Error opening file");
             return;
         }
+
         print_netascii_file(file);
         fclose(file);
-    } 
-    // Option 2: Execute the file
-    else if (choice == 2) {
-        // Check if the file is executable
+    } else if (choice == 2) {
         if (access(full_path, X_OK) != 0) {
             perror("File is not executable");
             return;
         }
-        
-        // Fork and execute the file
-        if (fork() == 0) {
-            execl(full_path, filename, (char *)NULL);  // Execute the file
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            execl(full_path, filename ? filename : full_path, (char *)NULL); //if filename is null or full_path is null, throw error 
             perror("Execution failed");
             exit(EXIT_FAILURE);
+        } else if (pid > 0) {
+            wait(NULL);
         } else {
-            wait(NULL);  // Parent waits for child process to finish
+            perror("Fork failed");
         }
     } else {
-        printf("Invalid choice or unsupported mode.\n");
+        printf("Invalid choice.\n");
     }
 }
 
-#endif
 
