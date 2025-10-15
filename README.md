@@ -13,6 +13,17 @@ This project is a TFTP code written in C by me with some twists to it such as:
 3. ACK - REACK functionality
 4. Multi-Threaded in a sense, since it works with 10 ports and it accepts any request then it should be multi-threaded.
 
+It suppose to be available in the final version for windows and MACs aswell,
+because of some functions that are suppose to make it run and some CRLF issues 
+that I haven't implemented for now.
+
+it is available for Linux for now,
+to run it you need to get to the terminal,
+cd to the path of the project,
+type make and hit enter,
+and then run it with ./tftp_server_r, ./tftp_client_r
+
+
 That's one of my first big projects so far, and hopefully will get better later on :) .
 
 Feel free to try it out! 
