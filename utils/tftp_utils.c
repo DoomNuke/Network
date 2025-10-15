@@ -59,7 +59,10 @@ int dir_exist(const char *dir_path){
 
 
 
-//reads if it is netascii
+/*
+    clrf - used for windows too
+    with preventing overflow (adding 1 byte safeguarding max_size)
+*/
 size_t read_netascii(FILE *file, char *buf, size_t max_size)
 {
     size_t bytes_read = 0;
@@ -102,27 +105,24 @@ void print_netascii_file(FILE *file) {
 size_t write_netascii(FILE *file, const char *buf, size_t size)
 {
 	size_t bytes_written = 0;
+
 	for (size_t i = 0; i < size; i++)
-	{
-      if (buf[i] == '\n')
+    {
+        //skip CR characters (0x0D)
+        if (buf[i] == '\r')
         {
-            // Convert linefeed ascii to newline linux based
-            if (fputc('\r', file) == EOF) return bytes_written;
-            if (fputc('\n', file) == EOF) return bytes_written + 1;
-            bytes_written += 2;
-        }
-        else if (buf[i] == '\r')
-        {
-            //convert cartirdge return to cartridge return
-            if (fputc('\r', file) == EOF) return bytes_written;
-            if (fputc('\0', file) == EOF) return bytes_written + 1;
-            bytes_written += 2;
-        }
-        else
-        {
-            if (fputc(buf[i], file) == EOF) return bytes_written;
             bytes_written++;
+            continue;
         }
+
+        //write the characters including LF
+
+        if(putc(buf[i], file) == EOF)
+        {
+            return bytes_written;
+        }
+        
+        bytes_written++;
     }
     return bytes_written;
 }

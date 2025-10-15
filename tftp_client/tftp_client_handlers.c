@@ -17,6 +17,12 @@
 int ports[MAX_PORTS] = {6970, 6971, 6972, 6973, 6974, 6975, 6976, 6977, 6978, 6979};
 int used[MAX_PORTS] = {0};
 
+/*
+    ports functions,
+    one is a randomizer, 
+    one is a setter,
+    one is a releaser
+*/
 int get_next_port()
 {
     int available_ports[MAX_PORTS];
@@ -65,168 +71,38 @@ void release_port(int port)
     printf("Port %d not found in used list\n", port);
 }
 
-int send_data(int sockfd, struct sockaddr_in *server_addr, FILE *file)
-{
-    char buffer[TFTP_BUF_SIZE];
-    uint16_t block_n = 1;
-    size_t bytes_read;
-    int retries;
-    char ack_buf[4];
-    socklen_t addr_len = sizeof(*server_addr);
-
-    while (1)
-    {
-        retries = 0;
-
-        // opcode set
-        buffer[0] = 0;
-        buffer[1] = TFTP_OPCODE_DATA;
-        buffer[2] = (block_n >> 8) & 0xFF;
-        buffer[3] = block_n & 0xFF;
-
-        bytes_read = fread(buffer + 4, 1, TFTP_DATA_SIZE, file);
-        if (ferror(file))
-        {
-            perror("File read error");
-            return -1;
-        }
-
-        size_t sent = sendto(sockfd, buffer, 4 + bytes_read, 0,
-                             (struct sockaddr *)server_addr, addr_len);
-        if (sent < 0)
-        {
-            perror("Sending file contents failed");
-            return -1;
-        }
-
-        while (retries < MAX_RETRIES)
-        {
-
-            ssize_t received = recvfrom(sockfd, ack_buf, sizeof(ack_buf), 0,
-                                        (struct sockaddr *)server_addr, &addr_len);
-
-            if (received >= 4 && ack_buf[1] == TFTP_OPCODE_ACK)
-            {
-                uint16_t ack_block = (ack_buf[2] << 8) | ack_buf[3];
-                if (ack_block == block_n)
-                {
-                    printf("ACK Received for block number: %d\n", block_n);
-                    break; // ACK Received
-                }
-                else
-                {
-                    fprintf(stderr, "Unexpected ACK block number: %d\n", ack_block);
-                }
-            }
-            else
-            {
-                perror("ACK not received or invalid");
-            }
-
-            sendto(sockfd, buffer, 4 + bytes_read, 0,
-                   (struct sockaddr *)server_addr, addr_len);
-            retries++;
-            sleep(2);
-        }
-
-        if (retries == MAX_RETRIES)
-        {
-            fprintf(stderr, "Failed to receive ACK after %d retries, aborting\n", MAX_RETRIES);
-            return -1;
-        }
-
-        // last block send check
-        if (bytes_read < TFTP_DATA_SIZE)
-        {
-            break;
-        }
-
-        block_n++;
-    }
-
-    return 0; // success
-}
-
 // WRQ client handler
 void wrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const char *mode)
 {
-    socklen_t addr_len = sizeof(*server_addr);
+    socklen_t server_len = sizeof(*server_addr);
+    char buffer[TFTP_BUF_SIZE];
     char filepath[PATH_LENGTH];
+    int c;
+    char answer;
+    uint16_t block_n = 1;
+    ssize_t sent_len;
+    ssize_t recv_len;
+    ssize_t bytes_read = 0;
+    FILE *file;
+    unsigned char ack_buf[4]; // Separate buffer for ACKs
 
     printf("Do you want to create a new file (y/n)? ");
-    char choice;
-    scanf(" %c", &choice);
-    getchar(); // clear newline
-
-    if (choice == 'y' || choice == 'Y')
-    {
-        printf("Enter the name of the new file: ");
-        scanf("%s", filename);
-        getchar();
-    }
-    else
-    {
-        printf("Enter the filename to upload: ");
-        scanf("%s", filename);
-        getchar();
-    }
-
-    snprintf(filepath, sizeof(filepath), "tftp_root/%s", filename);
-
-    // wrq packet prepartion
-    char buffer[TFTP_BUF_SIZE];
-    memset(buffer, 0, sizeof(buffer)); // clearing the buffer
-    uint16_t opcode = htons(TFTP_OPCODE_WRQ);
-    memcpy(buffer, &opcode, 2);
-    strcpy(buffer + 2, filename);
-    strcpy(buffer + 2 + strlen(filename) + 1, mode);
-    size_t wrq_len = 2 + strlen(filename) + 1 + strlen(mode) + 1;
-
-    // retrying to get ack(0)
-    char ack_buf[4];
-    int retries = 0;
-    int ack_received = 0;
-
-    while (retries < MAX_RETRIES)
-    {
-        ssize_t bytes_sent = sendto(sockfd, buffer, wrq_len, 0,
-                                    (struct sockaddr *)server_addr, addr_len);
-        if (bytes_sent < 0)
-        {
-            perror("Error sending WRQ");
-            return;
-        }
-
-        printf("Sent WRQ attempt %d for file '%s' in '%s' mode\n", retries + 1, filename, mode);
-
-        ssize_t received = recvfrom(sockfd, ack_buf, sizeof(ack_buf), 0,
-                                    (struct sockaddr *)server_addr, &addr_len);
-        if (received >= 4 && ack_buf[1] == TFTP_OPCODE_ACK)
-        {
-            uint16_t ack_block = ((uint16_t)ack_buf[2] << 8) | (uint16_t)ack_buf[3];
-            if (ack_block == 0)
-            {
-                printf("Received ACK(0), ready to send data\n");
-                ack_received = 1;
-                break;
-            }
-        }
-
-        retries++;
-        printf("Retrying to receive ACK(0)... attempt %d\n", retries);
-        sleep(5);
-    }
-
-    if (!ack_received)
-    {
-        fprintf(stderr, "Timed out waiting for ACK(0)\n");
-        return;
-    }
+    scanf(" %c", &answer);
 
     // letting the user create his own file
-    if (choice == 'y' || choice == 'Y')
+    if (answer == 'y' || answer == 'Y')
     {
-        FILE *file = fopen(filepath, "w");
+        printf("Enter the name for the new file:\n");
+        scanf("%s", filename);
+
+        snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_CLIENT_DIR, filename);
+
+        /*
+        opening it wb because of CRLF conversion
+        since im on linux i decided to treat it that way so it gets treated
+        byte by byte and it disables automatically the newline conversion
+        */
+        file = fopen(filepath, "wb");
         if (!file)
         {
             perror("Error creating file");
@@ -241,93 +117,221 @@ void wrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const ch
         }
         if (feof(stdin))
         {
+            while ((c = getchar()) != '\n' && c != EOF);
             clearerr(stdin);
-            fclose(file);
-            printf("File '%s' created\n", filepath);
-            printf("\e[1;1H\e[2J"); // clear screen after echo of the text, ANSI escape code
+            printf("\nFile '%s' created\n", filepath);
         }
     }
-    else if (choice == 'n' || choice == 'N')
+
+    else if (answer == 'n' || answer == 'N')
     {
-        snprintf(filepath, sizeof(filepath), "tftp_client_folder/%s", filename);
+        printf("Enter the name for the file:\n");
+        scanf("%s", filename);
+        while ((c = getchar()) != '\n' && c != EOF);
+
+        snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_CLIENT_DIR, filename);
 
         /*
-        To check whether it's an octet or netascii
-        via the file extension
+            To check whether it's an octet or netascii
+            via the file extension, automoatic checkup
         */
-        const char *mode = get_mode(filename);
 
+        file = fopen(filepath, "rb");
+        if (!file)
+        {
+            perror("Error reading file");
+            return;
+        }
+
+        mode = get_mode(filename);
+
+        if (strcmp(mode, "netascii") && strcmp(mode, "octet") != 0)
+        {
+            fprintf(stderr, "Unsupported mode %s\n", mode);
+            fclose(file);
+            return;
+        }
+    }
+
+    /*
+    In case the user didn't pressed y or n
+    */
+    else
+    {
+        printf("Error, please enter y/n\n");
+        return;
+    }
+
+    // Get file size
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    printf("file size is %ld\n", file_size);
+
+    // wrq packet preperation
+    memset(buffer, 0, sizeof(buffer)); // clearing the buffer
+    uint16_t opcode = htons(TFTP_OPCODE_WRQ);
+    memcpy(buffer, &opcode, sizeof(opcode));
+    strcpy(buffer + 2, filename);
+    strcpy(buffer + 2 + strlen(filename) + 1, mode);
+
+    printf("WRQ attempt for file '%s' in '%s' mode\n", filename, mode);
+
+    // Set socket receive timeout (5 seconds)
+    struct timeval tv = {5, 0};
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+    {
+        perror("setsockopt failed");
+        // continue anyways, not fatal
+    }
+
+    sent_len = sendto(sockfd, buffer, 2 + strlen(filename) + 1 + strlen(mode) + 1, 0,
+                      (struct sockaddr *)server_addr, server_len);
+    if (sent_len < 0)
+    {
+        perror("Error sending WRQ\n");
+        return;
+    }
+
+    recv_len = recvfrom(sockfd, ack_buf, sizeof(ack_buf), 0,
+                        (struct sockaddr *)server_addr, &server_len);
+    if (recv_len < 0)
+    {
+        perror("Error Receiving ACK\n");
+        return;
+    }
+
+    do
+    {
+        // Read the next block of data
         if (str_casecmp(mode, "netascii") == 0)
+            bytes_read = read_netascii(file, buffer + 4, TFTP_DATA_SIZE);
+        else
+            bytes_read = read_octet(file, buffer + 4, TFTP_DATA_SIZE);
+
+        // Build the DATA packet
+        buffer[0] = 0;
+        buffer[1] = TFTP_OPCODE_DATA;
+        buffer[2] = (block_n >> 8) & 0xFF;
+        buffer[3] = block_n & 0xFF;
+
+        int retries = 0;
+
+        while (retries < MAX_RETRIES)
         {
-            FILE *test = fopen(filepath, "r");
-            if (!test)
+            // Send the DATA packet
+            sent_len = sendto(sockfd, buffer, bytes_read + 4, 0,
+                              (struct sockaddr *)server_addr, server_len);
+            if (sent_len < 0)
             {
-                perror("Error reading file");
+                perror("sendto failed");
+                fclose(file);
                 return;
             }
-            fclose(test);
-        }
-        else if ((str_casecmp(mode, "octet") == 0))
-        {
-            FILE *test = fopen(filepath, "rb");
-            if (!test)
+
+            // Wait for ACK
+            recv_len = recvfrom(sockfd, ack_buf, sizeof(ack_buf), 0,
+                                (struct sockaddr *)server_addr, &server_len);
+
+            if (recv_len < 0)
             {
-                perror("Error reading file");
-                return;
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    // Timeout — retry sending the same data
+                    retries++;
+                    fprintf(stderr, "Timeout waiting for ACK for block %d. Retrying (%d/%d)...\n",
+                            block_n, retries, MAX_RETRIES);
+                    continue;
+                }
+                else
+                {
+                    perror("recvfrom failed");
+                    fclose(file);
+                    return;
+                }
             }
-            fclose(test);
+
+            // Check if it's a valid ACK
+            if (recv_len == 4 && ack_buf[0] == 0 && ack_buf[1] == TFTP_OPCODE_ACK)
+            {
+                uint16_t ack_block = (ack_buf[2] << 8) | ack_buf[3];
+                if (ack_block == block_n)
+                {
+                    // Valid ACK received
+                    break;
+                }
+                else
+                {
+                    fprintf(stderr, "Received ACK for unexpected block %d (expected %d). Ignoring...\n", ack_block, block_n);
+                }
+            }
+
+            // If we get here, either bad ack or wrong block number
+            retries++;
         }
-    }
-    else
-    {
-        printf("Invalid input\n");
-        return;
-    }
 
-    // open file for sending
-    FILE *data_to_send = fopen(filepath, "rb");
-    if (!data_to_send)
-    {
-        perror("Failed to open file for sending");
-        return;
-    }
+        if (retries >= MAX_RETRIES)
+        {
+            fprintf(stderr, "Max retries reached for block %d. Aborting transfer.\n", block_n);
+            fclose(file);
+            return;
+        }
 
-    // send data
-    int ret = send_data(sockfd, server_addr, data_to_send);
-    fclose(data_to_send);
+        // Proceed to next block
+        block_n++;
 
-    if (ret == 0)
-    {
-        printf("File sent successfully.\n");
-    }
-    else
-    {
-        fprintf(stderr, "Error during file sending.\n");
-        return;
-    }
+    } while (bytes_read == TFTP_DATA_SIZE); // Stop when last block is less than 512 bytes
+
+    fclose(file);
+    printf("File %s sent Successfully!\n", filename);
 }
 
 // Function to handle RRQ (Read Request)
-void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
+void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const char *mode)
 {
-    char mode[16];
-    socklen_t addr_len = sizeof(*server_addr);
+    socklen_t src_len = sizeof(*server_addr);
     char buffer[TFTP_BUF_SIZE];
-    FILE *file = NULL; // open file only after first data block arrives
+    FILE *file;
+    char filepath[PATH_LENGTH];
+    ssize_t bytes_sent;
+    int ch; // buffer-cleaner helper var
 
-    printf("Enter the filename to print/execute (netascii/octet): ");
+    printf("Enter the filename to download (netascii/octet): ");
     if (scanf("%255s", filename) != 1)
     {
         fprintf(stderr, "Error reading filename\n");
         return;
     }
+    else if (!file_exists(filename))
+    {
+        printf("File doesn't exist, please try again\n");
+        return;
+    }
 
     // automatic determination of the file extension aka mode
-    strncpy(mode, get_mode(filename), sizeof(mode) - 1);
-    mode[sizeof(mode) - 1] = '\0'; // for null termination
+    mode = get_mode(filename);
+
+    snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_CLIENT_DIR, filename);
+
+    if (strcmp(mode, "netascii") == 0 || strcmp(mode, "octet") == 0)
+    {
+        file = fopen(filepath, "wb");
+        {
+            if (!file)
+            {
+                perror("Error opening file to write");
+                return;
+            }
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Invalid mode :%s\n", mode);
+        return;
+    }
 
     // Clear stdin buffer
-    int ch;
     while ((ch = getchar()) != '\n' && ch != EOF)
         ;
 
@@ -338,8 +342,8 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
     strcpy(buffer + 2, filename);
     strcpy(buffer + 2 + strlen(filename) + 1, mode);
 
-    ssize_t bytes_sent = sendto(sockfd, buffer, 2 + strlen(filename) + 1 + strlen(mode) + 1, 0,
-                                (struct sockaddr *)server_addr, addr_len);
+    bytes_sent = sendto(sockfd, buffer, 2 + strlen(filename) + 1 + strlen(mode) + 1, 0,
+                        (struct sockaddr *)server_addr, src_len);
     if (bytes_sent < 0)
     {
         perror("Error sending RRQ");
@@ -356,25 +360,11 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
         // continue anyways, not fatal
     }
 
-    char full_path[PATH_LENGTH];
-    snprintf(full_path, sizeof(full_path), "%s/%s", TFTP_CLIENT_DIR, filename);
-
     uint16_t expected_block = 1;
     uint16_t last_ack_block = 0;
 
-    file = fopen(full_path, "wb");
-    {
-        if (!file)
-        {
-            perror("Error opening file to write");
-            return;
-        }
-    };
-
-    // TODO: fix it might be a problem with the server too
     while (1)
     {
-        socklen_t src_len = sizeof(*server_addr);
         ssize_t recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0,
                                     (struct sockaddr *)server_addr, &src_len);
         if (recv_len < 0)
@@ -395,7 +385,7 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
             break;
         }
 
-        uint16_t block_num = (buffer[2] << 8) | buffer[3];
+        uint16_t block_num = ((uint16_t)(uint8_t)buffer[2] << 8) | (uint16_t)(uint8_t)buffer[3];
         printf("Received DATA block %d, %zd bytes\n", block_num, recv_len - 4);
 
         if (block_num == expected_block)
@@ -407,10 +397,10 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
             fwrite(buffer + 4, 1, recv_len - 4, file);
 
             // Send ACK
-            char ack_pkt[4] = {0, TFTP_OPCODE_ACK,
-                               (block_num >> 8) & 0xFF,
-                               block_num & 0xFF};
-            ssize_t sent = sendto(sockfd, ack_pkt, 4, 0, (struct sockaddr *)server_addr, src_len);
+            unsigned char ack_pkt[4] = {0, TFTP_OPCODE_ACK,
+                                        (block_num >> 8) & 0xFF,
+                                        block_num & 0xFF};
+            ssize_t sent = sendto(sockfd, ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)server_addr, src_len);
 
             if (sent < 0)
             {
@@ -419,15 +409,32 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
             }
             printf("Sent ACK for block %d\n", block_num);
 
+            expected_block = block_num + 1;
             last_ack_block = block_num;
-            expected_block++;
-
-            printf("sent all blocks %d", last_ack_block);
-
-            // check if last block of data
-            if (recv_len < 4 + TFTP_DATA_SIZE)
-                break;
         }
+
+        else if (block_num == ((expected_block - 1) & 0xFFFF)) // Duplicate of last block and resend ack if needed
+        {
+            printf("Duplicate block %u received — resending ACK\n", block_num);
+            unsigned char ack_pkt[4] = {0, TFTP_OPCODE_ACK,
+                                        (block_num >> 8) & 0xFF,
+                                        block_num & 0xFF};
+            ssize_t sent = sendto(sockfd, ack_pkt, 4, 0, (struct sockaddr *)server_addr, src_len);
+            if (sent < 0)
+            {
+                perror("Failed to resend ACK");
+                break;
+            }
+        }
+
+        // check if last block of data
+        if (recv_len < 4 + TFTP_DATA_SIZE)
+        {
+            printf("Sent all blocks %d\n", last_ack_block);
+            printf("File %s has been downloaded successfully!\n", filename);
+            break;
+        }
+
         else
         {
             fprintf(stderr, "Received unexpected block %d, no ACK resent\n", block_num);
@@ -445,13 +452,14 @@ void rrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename)
 void del_h(int sockfd, struct sockaddr_in *server_addr)
 {
     char filename[PATH_LENGTH];
+    char buffer[TFTP_BUF_SIZE];
+
     printf("Enter the filename you want to delete: ");
     scanf("%s", filename);
 
     socklen_t addr_len = sizeof(*server_addr);
 
     // Build DELETE request
-    char buffer[TFTP_BUF_SIZE];
     memset(buffer, 0, sizeof(buffer));
 
     buffer[0] = 0;

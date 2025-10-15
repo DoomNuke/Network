@@ -19,7 +19,7 @@ int f_acc(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, con
 void send_ack(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, tftp_packet_t *packet);
 void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode);
 void rrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode);
-void del_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename, const char *mode);
+void del_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_len, const char *filename);
 
 
 #endif 

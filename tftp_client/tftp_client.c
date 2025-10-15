@@ -48,6 +48,10 @@ int main()
     const char *client_ip = "127.0.0.1"; // loopback, same goes for server
     char ip_add[60];
     char filename[256];
+    int sockfd;
+    struct sockaddr_in client_addr;
+    struct sockaddr_in server_addr;
+
 
     if (!dir_exist(TFTP_CLIENT_DIR))
     {
@@ -59,10 +63,6 @@ int main()
     printf("%s\n", ip_add);
 
     const char *mode = is_text_file(filename) ? "netascii" : "octet";
-
-    int sockfd;
-    struct sockaddr_in client_addr;
-    struct sockaddr_in server_addr;
 
     // Create the socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -79,6 +79,7 @@ int main()
     client_addr.sin_family = AF_INET;
     set_client_port(&client_addr);
 
+    //server address setup manual
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(TFTP_PORT);
@@ -87,7 +88,7 @@ int main()
     if (bind(sockfd, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0)
     {
         perror("Client bind failed");
-        release_port(ntohs(client_addr.sin_port)); // if bind fails, just to make sure
+        release_port(ntohs(client_addr.sin_port)); // if bind fails, just to make sure to release it
         exit(EXIT_FAILURE);
     }
 
@@ -99,7 +100,6 @@ int main()
 
     char input[10];
     int choice;
-
 
     while (client_running)
     {
@@ -121,17 +121,18 @@ int main()
         // Remove newline if present
         input[strcspn(input, "\n")] = 0;
 
+
         // Parse input as integer
         if (sscanf(input, "%d", &choice) != 1)
         {
             printf("Invalid choice, try again.\n");
             continue;
-        }
+        }        
 
         switch (choice)
         {
         case 1:
-            rrq_h(sockfd, &server_addr, filename);
+            rrq_h(sockfd, &server_addr, filename, mode);
             break;
         case 2:
             wrq_h(sockfd, &server_addr, filename, mode);

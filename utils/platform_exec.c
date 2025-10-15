@@ -8,8 +8,6 @@
 #include "platform_exec.h"
 #include "tftp_utils.h"
 
-#define MAX_PATH_LENGTH 300
-
 /*
 * 
 *
@@ -70,13 +68,20 @@ void handle_user_action(const char *filename, const char *mode) {
 #include <sys/types.h>
 #include <sys/wait.h>
 
+/*
+    a function that handles whatever the user chooses to do,
+    right now the second option doesn't work well because i
+    didn't implement an permission giver for the file,
+    but option number 1 works
+*/
+
 void handle_user_action(const char *filename, const char *mode, const char *dir) {
     
-    char full_path[MAX_PATH_LENGTH];
+    char full_path[PATH_LENGTH];
 
     //asking the user for the filename 
     if (filename == NULL) {
-        char input[280];
+        char input[254];
 
         printf("Enter the filename: ");
         if (fgets(input, sizeof(input), stdin) == NULL) {
@@ -133,7 +138,7 @@ void handle_user_action(const char *filename, const char *mode, const char *dir)
         fclose(file);
     } else if (choice == 2) {
         if (access(full_path, X_OK) != 0) {
-            perror("File is not executable");
+            perror("File don't got execute permissions\n");
             return;
         }
 
