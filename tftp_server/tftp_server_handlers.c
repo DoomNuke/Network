@@ -192,16 +192,7 @@ void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_l
     }
 
     // Open file for writing based on mode
-    if (str_casecmp(mode, "netascii") == 0)
-    {
-        file = fopen(filepath, "w");
-        if (!file)
-        {
-            logger("ERROR", "Failed to open file for writing\n");
-            return;
-        }
-    }
-    else if (str_casecmp(mode, "octet") == 0)
+    if (str_casecmp(mode, "netascii") == 0 || str_casecmp(mode, "octet") == 0)
     {
         file = fopen(filepath, "wb");
         if (!file)
@@ -210,6 +201,7 @@ void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_l
             return;
         }
     }
+
     else
     {
         printf("Unsupported mode\n");
@@ -243,6 +235,10 @@ void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_l
                 retries++;
                 fprintf(stderr, "Timeout waiting for ACK for block %d. Retrying (%d/%d)...\n",
                         block_n, retries, MAX_RETRIES);
+
+                packet.ack_pkt.block_n = block_n; 
+                send_ack(sockfd, client_addr, client_len, &packet);
+                
                 continue;
             }
             else

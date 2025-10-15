@@ -19,7 +19,7 @@ int used[MAX_PORTS] = {0};
 
 /*
     ports functions,
-    one is a randomizer, 
+    one is a randomizer,
     one is a setter,
     one is a releaser
 */
@@ -97,6 +97,8 @@ void wrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const ch
 
         snprintf(filepath, sizeof(filepath), "%s/%s", TFTP_CLIENT_DIR, filename);
 
+        while ((c = getchar()) != '\n' && c != EOF);
+
         /*
         opening it wb because of CRLF conversion
         since im on linux i decided to treat it that way so it gets treated
@@ -115,6 +117,18 @@ void wrq_h(int sockfd, struct sockaddr_in *server_addr, char *filename, const ch
         {
             write_netascii(file, line, strlen(line));
         }
+        fclose(file);
+
+        /*in order to open the file again to check if it has been created successfully*/
+        file = NULL;
+
+        file = fopen(filepath, "rb");
+        if (!file)
+        {
+            perror("Error re-opening file for reading");
+            return;
+        }
+
         if (feof(stdin))
         {
             while ((c = getchar()) != '\n' && c != EOF);

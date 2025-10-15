@@ -17,47 +17,52 @@ and octet mode, it works on unix based OS's and windows too
 /* additional feature to be made in the future----
 
 #ifdef _WIN32
-	#include <direct.h> //for mkdir in windows
-	#define MKDIR(TFTP_ROOT_DIR) _mkdir (PATH)
+    #include <direct.h> //for mkdir in windows
+    #define MKDIR(TFTP_ROOT_DIR) _mkdir (PATH)
 */
-	#include <unistd.h> //for unix
-	#define MKDIR(TFTP_ROOT_DIR) mkdir(PATH, 0777) //mkdir with full permissions
+#include <unistd.h>                            //for unix
+#define MKDIR(TFTP_ROOT_DIR) mkdir(PATH, 0777) // mkdir with full permissions
 
-
-int file_exists(const char *filename){
-	return access(filename, F_OK) != 1; //checks if the file exists
+int file_exists(const char *filename)
+{
+    return access(filename, F_OK) != 1; // checks if the file exists
 }
 
-
-
-
-int dir_exist(const char *dir_path){
+int dir_exist(const char *dir_path)
+{
     struct stat st = {0}; // setting up stat
 
     // check if the folder exists
-    if (stat(dir_path, &st) == -1) {
-        if (errno == ENOENT) {
+    if (stat(dir_path, &st) == -1)
+    {
+        if (errno == ENOENT)
+        {
             // directory doesn't exist, create it
-            if (mkdir(dir_path, 0777) == 0) {
+            if (mkdir(dir_path, 0777) == 0)
+            {
                 printf("Directory created successfully: %s\n", dir_path);
-                return 1; //success
-            } else {
-                perror("Error creating the directory");
-                return 0; //failed
+                return 1; // success
             }
-        } else {
-            //some other error
+            else
+            {
+                perror("Error creating the directory");
+                return 0; // failed
+            }
+        }
+        else
+        {
+            // some other error
             perror("Error checking directory");
             return 0; // Failure
         }
-    } else {
-        //directory exists
+    }
+    else
+    {
+        // directory exists
         printf("Directory exists: %s\n", dir_path);
         return 1;
     }
 }
-
-
 
 /*
     clrf - used for windows too
@@ -72,13 +77,22 @@ size_t read_netascii(FILE *file, char *buf, size_t max_size)
     {
         if (ch == '\n')
         {
-            if (bytes_read + 2 > max_size) break;
+            if (bytes_read + 2 > max_size)
+            {
+                ungetc(ch, file);
+                break;
+            }
+
             buf[bytes_read++] = '\r';
-            buf[bytes_read++] = '\n'; 
+            buf[bytes_read++] = '\n';
         }
         else
         {
-            if (bytes_read + 1 > max_size) break;
+            if (bytes_read + 1 > max_size)
+            {
+                ungetc(ch, file);
+                break;
+            }
             buf[bytes_read++] = (char)ch;
         }
     }
@@ -86,58 +100,54 @@ size_t read_netascii(FILE *file, char *buf, size_t max_size)
     return bytes_read;
 }
 
-
-//prints out the content
-void print_netascii_file(FILE *file) {
+// prints out the content
+void print_netascii_file(FILE *file)
+{
     char buffer[TFTP_BUF_SIZE];
     size_t bytes_read;
 
     // Rewind in case the file pointer is not at the beginning
     rewind(file);
 
-    while ((bytes_read = read_netascii(file, buffer, sizeof(buffer))) > 0) {
-        buffer[bytes_read] = '\0';  // Ensure null-termination
+    while ((bytes_read = read_netascii(file, buffer, sizeof(buffer))) > 0)
+    {
+        buffer[bytes_read] = '\0'; // Ensure null-termination
         printf("%s\n", buffer);
     }
 }
 
-//writes netascii
+// writes netascii
 size_t write_netascii(FILE *file, const char *buf, size_t size)
 {
-	size_t bytes_written = 0;
 
-	for (size_t i = 0; i < size; i++)
+    for (size_t i = 0; i < size; i++)
     {
-        //skip CR characters (0x0D)
+        // skip CR characters (0x0D)
         if (buf[i] == '\r')
         {
-            bytes_written++;
             continue;
         }
 
-        //write the characters including LF
+        // write the characters including LF
 
-        if(putc(buf[i], file) == EOF)
+        if (putc(buf[i], file) == EOF)
         {
-            return bytes_written;
+            return i;
         }
-        
-        bytes_written++;
     }
-    return bytes_written;
+    return size;
 }
-
 
 // checks if it's octet
 
 size_t read_octet(FILE *file, char *buf, size_t max_size)
 {
-	return fread(buf, 1, max_size, file); // Read raw binary data
+    return fread(buf, 1, max_size, file); // Read raw binary data
 }
 
 size_t write_octet(FILE *file, const char *buf, size_t size)
 {
-	return fwrite(buf, 1, size, file); // Write raw binary data
+    return fwrite(buf, 1, size, file); // Write raw binary data
 }
 
 const char *get_mode(const char *filename)
@@ -148,9 +158,9 @@ const char *get_mode(const char *filename)
         return "octet";
     }
 
-    ext++; //skip the dot
+    ext++; // skip the dot
 
-    //list of extensions for netascii
+    // list of extensions for netascii
     if (strcasecmp(ext, "txt") == 0 || strcasecmp(ext, "c") == 0 || strcasecmp(ext, "h") == 0 ||
         strcasecmp(ext, "html") == 0 || strcasecmp(ext, "htm") == 0 || strcasecmp(ext, "py") == 0 ||
         strcasecmp(ext, "csv") == 0 || strcasecmp(ext, "json") == 0 || strcasecmp(ext, "xml") == 0)
@@ -158,12 +168,14 @@ const char *get_mode(const char *filename)
         return "netascii";
     }
 
-    return "octet"; //by default it'll return octet
+    return "octet"; // by default it'll return octet
 }
 
-//for usage of strcasecmp - for both unix and windows 
-int str_casecmp(const char *s1, const char *s2) {
-    while (*s1 && *s2) {
+// for usage of strcasecmp - for both unix and windows
+int str_casecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2)
+    {
         if (tolower((unsigned char)*s1) != tolower((unsigned char)*s2))
             return (unsigned char)*s1 - (unsigned char)*s2;
         s1++;
@@ -171,4 +183,3 @@ int str_casecmp(const char *s1, const char *s2) {
     }
     return (unsigned char)*s1 - (unsigned char)*s2;
 }
-
