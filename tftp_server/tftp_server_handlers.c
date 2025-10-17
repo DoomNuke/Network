@@ -186,7 +186,7 @@ void wrq_handler(int sockfd, struct sockaddr_in *client_addr, socklen_t client_l
     // Check if the file exists, and if it does, exit (or send error to client, if desired)
     if (!f_exists(sockfd, client_addr, client_len, filename))
     {
-        printf("The file already exists, %s", filename);
+        printf("The file already exists, %s\n", filename);
         logger("ERROR", "File %s exists already\n", filename);
         return;
     }
